@@ -19,9 +19,11 @@ import ToolTip from '~/components/atoms/tooltip'
 import { Box, ButtonGhost, Flex, Input, Text } from '~/components/ui'
 
 import { clipboardHistoryStoreAtom } from '~/store/clipboardHistoryStore'
+import { collectionsStoreAtom } from '~/store/collectionStore'
 import { themeStoreAtom } from '~/store/themeStore'
 import { uiStoreAtom } from '~/store/uiStore'
 
+import { useGetCollectionWithClips } from '~/hooks/queries/use-collections'
 import {
   useFindClipboardHistory,
   useGetPinnedClipboardHistories,
@@ -34,8 +36,10 @@ import {
 import { useDebounce } from '~/hooks/use-debounce'
 
 import { ClipboardHistoryItem } from '~/types/history'
+import { Item } from '~/types/menu'
 
 import { ClipboardHistoryQuickPasteRow } from '../components/ClipboardHistory/ClipboardHistoryQuickPasteRow'
+import { QuickPasteClipRow } from '../components/ClipboardHistory/QuickPasteClipRow'
 
 type QuickPasteTab = 'history' | 'pinned'
 
@@ -125,6 +129,14 @@ function matchesSearch(item: ClipboardHistoryItem, term: string) {
   return (
     (item.value ?? '').toLowerCase().includes(term) ||
     (item.title ?? '').toLowerCase().includes(term)
+  )
+}
+
+function clipMatchesSearch(clip: Item, term: string) {
+  const isSecret = clip.isMasked || clip.isProtected
+  return (
+    (clip.name ?? '').toLowerCase().includes(term) ||
+    (!isSecret && (clip.value ?? '').toLowerCase().includes(term))
   )
 }
 
@@ -268,7 +280,28 @@ export default function ClipboardHistoryQuickPastePage() {
     [pinnedClipboardHistory]
   )
 
+  // Pinned clips: the saved clips on the pinned board of the active collection
+  useGetCollectionWithClips()
+  const { clipItems } = useAtomValue(collectionsStoreAtom)
+  const [copiedClipId, setCopiedClipId] = useState<string | null>(null)
+
+  const sortedPinnedClips = useMemo(
+    () =>
+      clipItems
+        .filter(item => item.isPinned && item.isClip)
+        .sort((a, b) => a.pinnedOrderNumber - b.pinnedOrderNumber),
+    [clipItems]
+  )
+
   // Pinned items are few, so the search filters them here (no backend call)
+  const pinnedClips = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase()
+    if (!term) {
+      return sortedPinnedClips
+    }
+    return sortedPinnedClips.filter(clip => clipMatchesSearch(clip, term))
+  }, [sortedPinnedClips, searchTerm])
+
   const pinnedItems = useMemo(() => {
     const term = searchTerm.trim().toLowerCase()
     if (!term) {
@@ -277,11 +310,21 @@ export default function ClipboardHistoryQuickPastePage() {
     return sortedPinnedHistory.filter(item => matchesSearch(item, term))
   }, [sortedPinnedHistory, searchTerm])
 
-  const activeItems = isPinnedTab ? pinnedItems : clipboardHistory
+  // The Pinned tab shows pinned clips first, then pinned history items.
+  // The selected index counts across both lists.
+  const pinnedTotalCount = sortedPinnedClips.length + sortedPinnedHistory.length
+  const activeLength = isPinnedTab
+    ? pinnedClips.length + pinnedItems.length
+    : clipboardHistory.length
   const selectedIndex = isPinnedTab ? selectedPinnedIndex : selectedHistoryIndex
   const setSelectedIndex = isPinnedTab ? setSelectedPinnedIndex : setSelectedHistoryIndex
 
-  const selectedItemId = activeItems[selectedIndex]?.historyId ?? null
+  const selectedItemId = isPinnedTab
+    ? pinnedItems[selectedPinnedIndex - pinnedClips.length]?.historyId ?? null
+    : clipboardHistory[selectedHistoryIndex]?.historyId ?? null
+  const selectedClipId = isPinnedTab
+    ? pinnedClips[selectedPinnedIndex]?.itemId ?? null
+    : null
 
   const hasActiveSearch = isPinnedTab ? searchTerm.trim().length > 0 : hasHistorySearch
 
@@ -292,8 +335,46 @@ export default function ClipboardHistoryQuickPastePage() {
     }
   }, [hasHistorySearch])
 
+  const pasteClip = async (itemId: string) => {
+    const showCopied = (onDone?: () => void) => {
+      setCopiedClipId(itemId)
+      setTimeout(() => {
+        setCopiedClipId(null)
+        onDone?.()
+      }, 600)
+    }
+
+    try {
+      if (isQuickPasteCopyOnly) {
+        await invoke('copy_paste_clip_item', { itemId, delay: 0, isCopyOnly: true })
+        showCopied(() => {
+          if (isQuickPasteAutoClose) {
+            appWindow?.close()
+          }
+        })
+      } else if (isQuickPasteAutoClose) {
+        await invoke('quickpaste_hide_paste_close_clip', { itemId })
+      } else {
+        await invoke('copy_paste_clip_item', { itemId, delay: 0, isCopyOnly: false })
+        showCopied()
+      }
+    } catch (error) {
+      console.error('Error copying/pasting clip:', error)
+    }
+  }
+
   const pasteItemAtIndex = (index: number) => {
-    const itemId = activeItems[index]?.historyId
+    if (isPinnedTab && index < pinnedClips.length) {
+      const clipId = pinnedClips[index]?.itemId
+      if (clipId) {
+        pasteClip(clipId)
+      }
+      return
+    }
+
+    const itemId = isPinnedTab
+      ? pinnedItems[index - pinnedClips.length]?.historyId
+      : clipboardHistory[index]?.historyId
     if (!itemId) {
       return
     }
@@ -551,7 +632,7 @@ export default function ClipboardHistoryQuickPastePage() {
       return
     }
 
-    const lastIndex = activeItems.length - 1
+    const lastIndex = activeLength - 1
 
     if (keyHome.includes(event.key)) {
       event.preventDefault()
@@ -623,7 +704,10 @@ export default function ClipboardHistoryQuickPastePage() {
       window.removeEventListener('focus', focusHandler)
     }
   }, [
-    activeItems,
+    activeLength,
+    clipboardHistory,
+    pinnedClips,
+    pinnedItems,
     activeTab,
     isShowSearch,
     searchTerm,
@@ -680,7 +764,7 @@ export default function ClipboardHistoryQuickPastePage() {
     }
   }
 
-  const foundCount = isPinnedTab ? pinnedItems.length : clipboardHistory.length
+  const foundCount = activeLength
 
   const isHistoryEmpty =
     !isClipboardInfiniteHistoryLoading &&
@@ -706,7 +790,7 @@ export default function ClipboardHistoryQuickPastePage() {
               onClick={() => switchTab('pinned')}
               icon={<Pin size={13} />}
               label={t('Pinned', { ns: 'common' })}
-              count={sortedPinnedHistory.length}
+              count={pinnedTotalCount}
             />
           </Flex>
           <ButtonGhost
@@ -752,22 +836,46 @@ export default function ClipboardHistoryQuickPastePage() {
           id="quick-paste-history-list"
         >
           {isPinnedTab ? (
-            pinnedItems.length > 0 ? (
+            activeLength > 0 ? (
               <div
                 className="overflow-y-auto overflow-x-hidden pr-0.5"
                 style={{ height: listHeight ?? 300 }}
               >
+                {pinnedClips.length > 0 && pinnedItems.length > 0 && (
+                  <SectionLabel text={t('Pinned Clips', { ns: 'history' })} />
+                )}
+                {pinnedClips.map((clip, index) => (
+                  <QuickPasteClipRow
+                    key={`clip-${clip.itemId}`}
+                    clip={clip}
+                    shortcutIndex={index}
+                    isKeyboardSelected={selectedClipId === clip.itemId}
+                    isCopied={copiedClipId === clip.itemId}
+                    isScrolling={isScrolling}
+                    isWindows={isWindows}
+                    searchTerm={hasActiveSearch ? searchTerm : ''}
+                    isSingleClickToCopyPaste={
+                      isSingleClickToCopyPaste || isSingleClickToCopyPasteQuickWindow
+                    }
+                    isSingleClickKeyboardFocus={isSingleClickKeyboardFocus}
+                    onSelect={() => setSelectedPinnedIndex(index)}
+                    onCopyPaste={() => pasteClip(clip.itemId)}
+                  />
+                ))}
+                {pinnedClips.length > 0 && pinnedItems.length > 0 && (
+                  <SectionLabel text={t('Pinned History', { ns: 'history' })} />
+                )}
                 {pinnedItems.map((item, index) => (
                   <ClipboardHistoryQuickPasteRow
                     key={item.historyId}
                     {...getSharedRowProps(item)}
                     isPinnedTop
-                    isPinnedTopFirst={index === 0}
-                    shortcutIndex={index}
+                    isPinnedTopFirst={index === 0 && pinnedClips.length === 0}
+                    shortcutIndex={pinnedClips.length + index}
                     setKeyboardSelected={id => {
                       const index = pinnedItems.findIndex(item => item.historyId === id)
                       if (index > -1) {
-                        setSelectedPinnedIndex(index)
+                        setSelectedPinnedIndex(pinnedClips.length + index)
                       }
                     }}
                   />
@@ -925,6 +1033,14 @@ function QuickPasteTabButton({
         </span>
       )}
     </button>
+  )
+}
+
+function SectionLabel({ text }: { text: string }) {
+  return (
+    <Text className="!text-[10px] uppercase tracking-wide font-semibold text-slate-400 dark:text-slate-500 px-1 pt-1">
+      {text}
+    </Text>
   )
 }
 

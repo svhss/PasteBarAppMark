@@ -154,6 +154,36 @@ async fn quickpaste_hide_paste_close(
   Ok(())
 }
 
+/// Same as `quickpaste_hide_paste_close`, but for a saved clip (pinned clips tab).
+#[tauri::command]
+async fn quickpaste_hide_paste_close_clip(
+  app_handle: tauri::AppHandle,
+  item_id: String,
+) -> Result<(), String> {
+  let window = app_handle
+    .get_window("quickpaste")
+    .ok_or_else(|| "Failed to get quickpaste window".to_string())?;
+
+  window
+    .hide()
+    .map_err(|e| format!("Failed to hide window: {}", e))?;
+
+  // Return focus to the previous window
+  #[cfg(target_os = "macos")]
+  return_focus_to_previous_window();
+
+  sleep(StdDuration::from_millis(200)).await;
+
+  // Copy and paste the clip (this also handles clip options, for example keys to press after paste)
+  clipboard_commands::copy_paste_clip_item(app_handle.clone(), item_id, 0, false).await;
+
+  window
+    .close()
+    .map_err(|e| format!("Failed to close window: {}", e))?;
+
+  Ok(())
+}
+
 /// Turns the Win+V shortcut for the Quick Paste window on or off.
 /// Returns true when the shortcut is supported (Windows only).
 #[tauri::command]
@@ -1420,6 +1450,7 @@ async fn main() {
       open_history_window,
       open_quickpaste_window,
       quickpaste_hide_paste_close,
+      quickpaste_hide_paste_close_clip,
       set_quickpaste_win_v_hook,
       set_icon
     ])
