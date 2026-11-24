@@ -218,7 +218,6 @@ function App() {
           isMainWindowOnTop: settings.isMainWindowOnTop?.valueBool ?? false,
           isQuickPasteCopyOnly: settings.isQuickPasteCopyOnly?.valueBool ?? false,
           isQuickPasteAutoClose: settings.isQuickPasteAutoClose?.valueBool ?? true,
-          isQuickPasteWinVEnabled: settings.isQuickPasteWinVEnabled?.valueBool ?? false,
           isSingleClickToCopyPaste: settings.isSingleClickToCopyPaste?.valueBool ?? false,
           isSingleClickKeyboardFocus:
             settings.isSingleClickKeyboardFocus?.valueBool ?? false,
@@ -306,16 +305,6 @@ function App() {
           } catch (e) {
             console.error(e)
           }
-        }
-
-        // Windows only: Win+V opens Quick Paste (the backend uses a keyboard hook,
-        // because Windows does not let apps register Win+V as a global shortcut)
-        if (window.isMainWindow) {
-          invoke('set_quickpaste_win_v_hook', {
-            enabled: settings.isQuickPasteWinVEnabled?.valueBool ?? false,
-          }).catch(e => {
-            console.error(e)
-          })
         }
 
         if (settings.hotKeysShowHideQuickPasteWindow?.valueText) {
@@ -479,14 +468,6 @@ function App() {
       }
     })
 
-    const listenToQuickPasteWinVUnlisten = listen('quickpaste://win-v', async () => {
-      if (window.isMainWindow) {
-        await uiStore.toggleHistoryQuickPasteWindow(
-          t('PasteBar Quick Paste', { ns: 'settings2' })
-        )
-      }
-    })
-
     i18n.on('languageChanged', async function () {
       await queryClient.invalidateQueries({
         queryKey: ['get_clipboard_history'],
@@ -509,10 +490,6 @@ function App() {
       }
 
       listenToNavigateUnlisten.then(unlisten => {
-        unlisten()
-      })
-
-      listenToQuickPasteWinVUnlisten.then(unlisten => {
         unlisten()
       })
 

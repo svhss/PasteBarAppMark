@@ -184,23 +184,6 @@ async fn quickpaste_hide_paste_close_clip(
   Ok(())
 }
 
-/// Turns the Win+V shortcut for the Quick Paste window on or off.
-/// Returns true when the shortcut is supported (Windows only).
-#[tauri::command]
-fn set_quickpaste_win_v_hook(app_handle: tauri::AppHandle, enabled: bool) -> bool {
-  #[cfg(target_os = "windows")]
-  {
-    win_v_hook::set_enabled(app_handle, enabled);
-    true
-  }
-
-  #[cfg(not(target_os = "windows"))]
-  {
-    let _ = (app_handle, enabled);
-    false
-  }
-}
-
 #[tauri::command]
 fn open_path_or_app(path: String) -> Result<(), String> {
   opener::open(path).map_err(|e| format!("Failed to open path: {}", e))
@@ -1116,6 +1099,10 @@ async fn main() {
       let app_settings = get_all_settings(None).unwrap_or_default();
       cron_jobs::setup_cron_jobs();
 
+      // Windows: Win+V always opens the Quick Paste window (instead of the Windows clipboard panel)
+      #[cfg(target_os = "windows")]
+      win_v_hook::start(app.handle());
+
       #[cfg(target_os = "macos")]
       {
         let settings_map = app_settings.lock().unwrap();
@@ -1451,7 +1438,6 @@ async fn main() {
       open_quickpaste_window,
       quickpaste_hide_paste_close,
       quickpaste_hide_paste_close_clip,
-      set_quickpaste_win_v_hook,
       set_icon
     ])
     .plugin(clipboard::init())
