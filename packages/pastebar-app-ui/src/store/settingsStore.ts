@@ -107,6 +107,7 @@ type Settings = {
   isSingleClickToCopyPasteQuickWindow: boolean
   isQuickPasteCopyOnly: boolean
   isQuickPasteAutoClose: boolean
+  isQuickPasteWinVEnabled: boolean
   isKeepPinnedOnClearEnabled: boolean
   isKeepStarredOnClearEnabled: boolean
   hasPinProtectedCollections: boolean
@@ -206,6 +207,7 @@ export interface SettingsStoreState {
   setIsMainWindowOnTop: (isEnabled: boolean) => void
   setIsQuickPasteCopyOnly: (isEnabled: boolean) => void
   setIsQuickPasteAutoClose: (isEnabled: boolean) => void
+  setIsQuickPasteWinVEnabled: (isEnabled: boolean) => void
   setIsSingleClickToCopyPaste: (isEnabled: boolean) => void
   setIsSingleClickKeyboardFocus: (isEnabled: boolean) => void
   setIsSingleClickToCopyPasteQuickWindow: (isEnabled: boolean) => void
@@ -326,6 +328,7 @@ const initialState: SettingsStoreState & Settings = {
   isSingleClickToCopyPasteQuickWindow: false,
   isQuickPasteCopyOnly: false,
   isQuickPasteAutoClose: true,
+  isQuickPasteWinVEnabled: false,
   isKeepPinnedOnClearEnabled: false,
   isKeepStarredOnClearEnabled: false,
   protectedCollections: [],
@@ -416,6 +419,7 @@ const initialState: SettingsStoreState & Settings = {
   setIsSingleClickToCopyPasteQuickWindow: () => {},
   setIsQuickPasteCopyOnly: () => {},
   setIsQuickPasteAutoClose: () => {},
+  setIsQuickPasteWinVEnabled: () => {},
   setIsKeepPinnedOnClearEnabled: () => {},
   setIsKeepStarredOnClearEnabled: () => {},
   initConstants: () => {},
@@ -859,6 +863,12 @@ export const settingsStore = createStore<SettingsStoreState & Settings>()((set, 
   setIsQuickPasteAutoClose: async (isEnabled: boolean) => {
     get().syncStateUpdate('isQuickPasteAutoClose', isEnabled)
     return get().updateSetting('isQuickPasteAutoClose', isEnabled)
+  },
+  setIsQuickPasteWinVEnabled: async (isEnabled: boolean) => {
+    get().syncStateUpdate('isQuickPasteWinVEnabled', isEnabled)
+    // Windows only: start or stop the Win+V keyboard hook in the backend
+    await invoke('set_quickpaste_win_v_hook', { enabled: isEnabled })
+    return get().updateSetting('isQuickPasteWinVEnabled', isEnabled)
   },
   setIsKeepPinnedOnClearEnabled: async (isEnabled: boolean) => {
     get().syncStateUpdate('isKeepPinnedOnClearEnabled', isEnabled)

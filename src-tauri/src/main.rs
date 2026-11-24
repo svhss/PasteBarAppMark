@@ -30,6 +30,9 @@ use window_ext::WindowToolBar;
 #[cfg(target_os = "macos")]
 mod window_ext;
 
+#[cfg(target_os = "windows")]
+mod win_v_hook;
+
 mod clipboard;
 mod commands;
 mod constants;
@@ -149,6 +152,23 @@ async fn quickpaste_hide_paste_close(
     .map_err(|e| format!("Failed to close window: {}", e))?;
 
   Ok(())
+}
+
+/// Turns the Win+V shortcut for the Quick Paste window on or off.
+/// Returns true when the shortcut is supported (Windows only).
+#[tauri::command]
+fn set_quickpaste_win_v_hook(app_handle: tauri::AppHandle, enabled: bool) -> bool {
+  #[cfg(target_os = "windows")]
+  {
+    win_v_hook::set_enabled(app_handle, enabled);
+    true
+  }
+
+  #[cfg(not(target_os = "windows"))]
+  {
+    let _ = (app_handle, enabled);
+    false
+  }
 }
 
 #[tauri::command]
@@ -1400,6 +1420,7 @@ async fn main() {
       open_history_window,
       open_quickpaste_window,
       quickpaste_hide_paste_close,
+      set_quickpaste_win_v_hook,
       set_icon
     ])
     .plugin(clipboard::init())

@@ -102,6 +102,8 @@ export default function UserPreferences() {
     setIsQuickPasteCopyOnly,
     isQuickPasteAutoClose,
     setIsQuickPasteAutoClose,
+    isQuickPasteWinVEnabled,
+    setIsQuickPasteWinVEnabled,
     isSingleClickToCopyPaste,
     setIsSingleClickToCopyPaste,
     isSingleClickKeyboardFocus, // New state
@@ -1228,6 +1230,31 @@ export default function UserPreferences() {
                           )}
                         </Flex>
                       </Box>
+                      {isWindows && (
+                        <div className="flex items-center justify-between gap-4 pt-1">
+                          <div>
+                            <Text className="text-[15px] font-semibold">
+                              {t('Use Win+V to open Quick Paste', { ns: 'settings2' })}
+                            </Text>
+                            <Text className="text-xs text-muted-foreground">
+                              {t(
+                                'PasteBar opens Quick Paste instead of the Windows clipboard panel when you press Win+V. Turn off to give Win+V back to Windows.',
+                                { ns: 'settings2' }
+                              )}
+                            </Text>
+                          </div>
+                          <Switch
+                            checked={isQuickPasteWinVEnabled}
+                            onCheckedChange={async checked => {
+                              try {
+                                await setIsQuickPasteWinVEnabled(checked)
+                              } catch (error) {
+                                console.error('Failed to update Win+V setting:', error)
+                              }
+                            }}
+                          />
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
                 </Box>

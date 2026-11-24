@@ -12,7 +12,7 @@ version = "1.5"
 features = []
 
 [target.'cfg(target_os = "windows")'.dependencies]
-winapi = { version = "0.3", features = ["winuser", "windef"] }
+winapi = { version = "0.3", features = ["winuser", "windef", "libloaderapi", "processthreadsapi"] }
 winreg = "0.52.0"
 clipboard-win = "5.4.0"
 
