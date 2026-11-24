@@ -208,7 +208,8 @@ export default function UserPreferences() {
       modifierCount++
     }
     if (metaKey) {
-      pressedKeys.push('Cmd')
+      // Windows key: "Super" is the name the hotkey system accepts on Windows
+      pressedKeys.push(isWindows ? 'Super' : 'Cmd')
       modifierCount++
     }
 
@@ -1044,6 +1045,15 @@ export default function UserPreferences() {
                           {t('How to set hotkeys:', { ns: 'settings2' })}
                         </Text>
                         <ul className="text-xs text-blue-700 dark:text-blue-300 space-y-1">
+                          {isWindows && (
+                            <li className="font-semibold">
+                              •{' '}
+                              {t(
+                                'Win+V always opens the Quick Paste window. You do not need to set it here.',
+                                { ns: 'settings2' }
+                              )}
+                            </li>
+                          )}
                           <li>
                             •{' '}
                             {t('Click Set/Change button to start recording', {
