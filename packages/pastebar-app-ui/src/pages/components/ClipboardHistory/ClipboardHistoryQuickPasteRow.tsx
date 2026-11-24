@@ -22,11 +22,9 @@ import { useTranslation } from 'react-i18next'
 import { ensureUrlPrefix, getSelectedText } from '~/lib/utils'
 
 import ImageWithFallback from '~/components/atoms/image/image-with-fallback-on-error'
-import LinkCard from '~/components/atoms/link-card/link-card'
 import PlayButton from '~/components/atoms/play-button/PlayButton'
 import ToolTip from '~/components/atoms/tooltip'
 import { Badge, Box } from '~/components/ui'
-import YoutubeEmbed from '~/components/video-player/YoutubeEmbed'
 
 import { useSignal } from '~/hooks/use-signal'
 
@@ -39,8 +37,40 @@ import {
   hyperlinkTextWithPreview,
 } from '../helpers'
 
+// hyperlinkTextWithPreview calls hooks, and the row calls it only when there is no
+// search text. Render it as its own component, so the row's hook count stays the same
+// when the search text changes (pinned rows are not re-mounted on each render).
+const HyperlinkTextWithPreview = (
+  props: Parameters<typeof hyperlinkTextWithPreview>[0]
+) => <>{hyperlinkTextWithPreview(props)}</>
+
+// Compact layout: a clip shows at most this many lines until it is expanded.
+const QUICK_PASTE_MAX_PREVIEW_LINES = 3
+
+// Search results: show the same number of lines as the compact preview,
+// starting at the first line that contains the search text.
+function getSearchLinesPreview(text: string, searchTerm: string) {
+  const lines = text.replace(/\r\n/g, '\n').split('\n')
+  const term = searchTerm.toLowerCase()
+  const firstMatchLine = Math.max(
+    lines.findIndex(line => line.toLowerCase().includes(term)),
+    0
+  )
+  return lines
+    .slice(firstMatchLine, firstMatchLine + QUICK_PASTE_MAX_PREVIEW_LINES)
+    .join('\n')
+}
+
+const labelClassName =
+  'bg-slate-200 text-slate-700 dark:bg-slate-600 dark:text-slate-300 text-[10px] leading-4 rounded-sm px-1'
+
+const imageClassName =
+  'max-w-full max-h-20 min-h-8 rounded shadow-sm border border-slate-100 dark:border-slate-700'
+
 interface ClipboardHistoryQuickPasteRowProps {
   index?: number
+  // Number shown in the Ctrl+1..0 badge when the row is not in the virtual list
+  shortcutIndex?: number
   style?: CSSProperties
   isExpanded: boolean
   isWindows?: boolean
@@ -111,6 +141,7 @@ interface ClipboardHistoryQuickPasteRowProps {
 // eslint-disable-next-line sonarjs/cognitive-complexity
 export function ClipboardHistoryQuickPasteRowComponent({
   index,
+  shortcutIndex,
   style,
   clipboard,
   isDark,
@@ -261,12 +292,16 @@ export function ClipboardHistoryQuickPasteRowComponent({
   const isMp3 = clipboard?.isLink && clipboard?.value?.endsWith('.mp3')
 
   const { valuePreview, valueMorePreviewLines, valueMorePreviewChars } = useMemo(() => {
-    if (historyPreviewLineLimit && historyPreviewLineLimit > 0 && clipboard?.value) {
+    if (clipboard?.value) {
+      const previewLineLimit =
+        historyPreviewLineLimit && historyPreviewLineLimit > 0
+          ? Math.min(historyPreviewLineLimit, QUICK_PASTE_MAX_PREVIEW_LINES)
+          : QUICK_PASTE_MAX_PREVIEW_LINES
       const result = getValuePreview(
         clipboard.value,
         clipboard.isImageData || false,
         isExpanded,
-        historyPreviewLineLimit,
+        previewLineLimit,
         true
       )
       return {
@@ -326,10 +361,11 @@ export function ClipboardHistoryQuickPasteRowComponent({
     }
   }, [clipboard?.isLink, hasLinkCard])
 
+  const badgeIndex = shortcutIndex ?? index
   const showCopyPasteIndexNumber =
     (isKeyCtrlPressed.value || (isKeyAltPressed.value && !isWindows)) &&
-    typeof index !== 'undefined' &&
-    index < 10
+    typeof badgeIndex !== 'undefined' &&
+    badgeIndex < 10
 
   const pinnedTopOffsetFirst = !isPinnedTopFirst ? 'top-[-10px]' : 'top-[5px]'
   const bgToolsPanel = `${
@@ -376,8 +412,8 @@ export function ClipboardHistoryQuickPasteRowComponent({
       <Box ref={rowRef} tabIndex={0} role="option" aria-selected={isKeyboardSelected}>
         {showTimeAgo && (
           <Box
-            className={`flex justify-center text-gray-400 text-xs ${
-              index === 0 ? 'pt-0' : 'pt-2'
+            className={`flex justify-center text-gray-400 text-[10px] ${
+              index === 0 ? 'pt-0' : 'pt-1'
             }`}
           >
             {timeAgo}
@@ -392,7 +428,10 @@ export function ClipboardHistoryQuickPasteRowComponent({
           aria-selected={isKeyboardSelected}
         >
           <Box
-            className={`rounded-md justify-start duration-300 relative px-3 py-0.5 my-0.5 shadow-none border-2 flex flex-col ${
+            className={`rounded-md justify-start duration-300 relative px-2 py-1 my-0.5 shadow-none border flex flex-col ${
+              // Keep space at the bottom for the "+N lines" button, so it does not cover the text
+              valueMorePreviewLines || valueMorePreviewChars ? '!pb-[18px]' : ''
+            } ${
               index === 0 &&
               clipboard.updatedAt > Date.now() - MINUTE_IN_MS &&
               !isCopiedOrPasted &&
@@ -494,17 +533,17 @@ export function ClipboardHistoryQuickPasteRowComponent({
                 showCopyPasteIndexNumber && (
                   <Box className="flex flex-row items-center pr-2 z-100">
                     <Badge
-                      className="font-mono bg-slate-200 dark:bg-slate-700 !py-0"
+                      className="font-mono bg-slate-200 dark:bg-slate-700 !py-0 !px-1.5 text-[10px]"
                       variant="outline"
                     >
-                      {index === 9 ? 0 : index + 1}
+                      {badgeIndex === 9 ? 0 : badgeIndex + 1}
                     </Badge>
                   </Box>
                 )
               )}
               {clipboard.isImageData ? (
                 <Box className="text-ellipsis self-start text-xs w-full _select-text overflow-hidden cursor-pointer">
-                  <Box className="flex px-0 py-1 items-center justify-center w-full">
+                  <Box className="flex px-0 py-0.5 items-center justify-center w-full">
                     <ImageWithFallback
                       src={textValue}
                       hasError={isBrokenImage}
@@ -516,10 +555,10 @@ export function ClipboardHistoryQuickPasteRowComponent({
                       onLoad={() => {
                         contentElementRendered.value = true
                       }}
-                      className="max-w-full max-h-56 min-h-10 rounded-md shadow-sm border border-slate-100 dark:border-slate-700"
+                      className={imageClassName}
                     />
                   </Box>
-                  <code className="pb-0.5">
+                  <code className="pb-0.5 text-[11px] whitespace-nowrap">
                     {searchTerm ? (
                       highlightWithPreviewMatchedText(clipboard.value, searchTerm)
                     ) : (
@@ -529,7 +568,7 @@ export function ClipboardHistoryQuickPasteRowComponent({
                 </Box>
               ) : clipboard.isLink && clipboard.isImage ? (
                 <Box className="text-ellipsis self-start text-xs w-full _select-text cursor-pointer overflow-hidden">
-                  <Box className="flex px-0 pt-1.5 pb-0.5 items-center justify-center w-full">
+                  <Box className="flex px-0 py-0.5 items-center justify-center w-full">
                     <ImageWithFallback
                       src={ensureUrlPrefix(textValue)}
                       hasError={isBrokenImage}
@@ -542,26 +581,17 @@ export function ClipboardHistoryQuickPasteRowComponent({
                       onLoad={() => {
                         contentElementRendered.value = true
                       }}
-                      className="max-w-full max-h-56 min-h-10 rounded-md shadow-sm border border-slate-100 dark:border-slate-700"
+                      className={imageClassName}
                     />
                   </Box>
-                  <code className="pb-0.5">
-                    {searchTerm
-                      ? highlightWithPreviewMatchedText(textValue, searchTerm)
-                      : hyperlinkText(textValue, clipboard.arrLinks)}
-                  </code>
-                </Box>
-              ) : clipboard.isLink && clipboard.isVideo ? (
-                <Box className="text-ellipsis self-start text-xs w-full _select-text cursor-pointer overflow-hidden">
-                  <YoutubeEmbed url={textValue} />
-                  <code className="pb-0.5">
+                  <code className="pb-0.5 font-sans text-xs whitespace-nowrap">
                     {searchTerm
                       ? highlightWithPreviewMatchedText(textValue, searchTerm)
                       : hyperlinkText(textValue, clipboard.arrLinks)}
                   </code>
                 </Box>
               ) : clipboard.isImage && clipboard.imageDataUrl ? (
-                <Box className="px-0 py-1.5 flex items-center justify-center w-full">
+                <Box className="px-0 py-0.5 flex items-center justify-center w-full">
                   <img
                     src={clipboard.imageDataUrl}
                     draggable={false}
@@ -570,7 +600,7 @@ export function ClipboardHistoryQuickPasteRowComponent({
                     onLoad={() => {
                       contentElementRendered.value = true
                     }}
-                    className="max-w-full max-h-56 min-h-10 rounded-md shadow-sm border border-slate-100 dark:border-slate-700"
+                    className={imageClassName}
                   />
                 </Box>
               ) : clipboard.detectedLanguage && valuePreview ? (
@@ -580,7 +610,7 @@ export function ClipboardHistoryQuickPasteRowComponent({
                       contentElementRendered.value = true
                     }
                   }}
-                  className={`text-ellipsis self-start text-sm w-full overflow-hidden`}
+                  className={`text-ellipsis self-start text-xs w-full overflow-hidden`}
                 >
                   <Highlight
                     theme={isDark ? themes.vsDark : themes.github}
@@ -589,7 +619,10 @@ export function ClipboardHistoryQuickPasteRowComponent({
                   >
                     {({ className, style, tokens, getLineProps, getTokenProps }) => {
                       return (
-                        <code className={`${className}`} style={style}>
+                        <code
+                          className={`${className} text-[11px] leading-4`}
+                          style={style}
+                        >
                           {tokens.map((line, i) => {
                             const isLastLine =
                               i === tokens.length - 1 &&
@@ -630,43 +663,38 @@ export function ClipboardHistoryQuickPasteRowComponent({
                       contentElementRendered.value = true
                     }
                   }}
-                  className="text-ellipsis self-start text-sm w-full overflow-hidden"
+                  className="text-ellipsis self-start text-xs w-full overflow-hidden"
                 >
+                  {/* Compact layout: link cards and video players are not shown.
+                      The link title (when known) is shown on one line above the URL. */}
                   {hasLinkCard && (
-                    <Box className="self-start mt-1.5 mb-1 text-xs w-full overflow-hidden">
-                      <LinkCard
-                        title={clipboard.linkMetadata?.linkTitle}
-                        isTrack={clipboard.linkMetadata?.linkIsTrack}
-                        trackTitle={clipboard.linkMetadata?.linkTrackTitle}
-                        trackArtist={clipboard.linkMetadata?.linkTrackArtist}
-                        trackAlbum={clipboard.linkMetadata?.linkTrackAlbum}
-                        description={clipboard.linkMetadata?.linkDescription}
-                        favicon={clipboard.linkMetadata?.linkFavicon}
-                        link={clipboard?.linkMetadata?.linkUrl ?? null}
-                        image={clipboard.linkMetadata?.linkImage}
-                        historyId={clipboard.historyId}
-                        domain={clipboard.linkMetadata?.linkDomain}
-                      />
+                    <Box className="text-xs font-medium truncate text-slate-700 dark:text-slate-300">
+                      {clipboard.linkMetadata?.linkTitle}
                     </Box>
                   )}
                   {isExpanded ? (
-                    <code className="justify-start cursor-pointer">
+                    <code className="justify-start cursor-pointer font-sans text-xs leading-4">
                       {searchTerm
                         ? highlightMatchedText(textValue, searchTerm)
                         : hyperlinkText(textValue, clipboard.arrLinks)}
                     </code>
                   ) : (
-                    <code className="justify-start cursor-pointer whitespace-pre">
-                      {searchTerm
-                        ? highlightWithPreviewMatchedText(textValue ?? '', searchTerm)
-                        : hyperlinkTextWithPreview({
-                            previewLinkCard: !hasLinkCard && isLinkCardPreviewEnabled,
-                            isPreviewError: hasClipboardHistoryURLErrors,
-                            value: valuePreview ?? '',
-                            links: clipboard.arrLinks,
-                            itemId: null,
-                            historyId: clipboard.historyId,
-                          })}
+                    <code className="justify-start cursor-pointer whitespace-pre font-sans text-xs leading-4">
+                      {searchTerm ? (
+                        highlightWithPreviewMatchedText(
+                          getSearchLinesPreview(textValue, searchTerm),
+                          searchTerm
+                        )
+                      ) : (
+                        <HyperlinkTextWithPreview
+                          previewLinkCard={!hasLinkCard && isLinkCardPreviewEnabled}
+                          isPreviewError={hasClipboardHistoryURLErrors}
+                          value={valuePreview ?? ''}
+                          links={clipboard.arrLinks}
+                          itemId={null}
+                          historyId={clipboard.historyId}
+                        />
+                      )}
                       {isMp3 && (
                         <PlayButton
                           src={textValue}
@@ -687,7 +715,7 @@ export function ClipboardHistoryQuickPasteRowComponent({
                   className={`absolute left-1 bottom-1 flex flex-row items-center rounded mb-[2px] pl-0.5 ${bgToolsPanel}`}
                 >
                   <Box
-                    className={`text-xs text-muted-foreground px-1 cursor-pointer`}
+                    className={`text-[10px] leading-4 text-muted-foreground px-1 cursor-pointer`}
                     onClick={() => {
                       setExpanded(clipboard.historyId, !isExpanded)
                     }}
@@ -744,7 +772,7 @@ export function ClipboardHistoryQuickPasteRowComponent({
               {clipboard.isImage && !clipboard.isLink && (
                 <Box className="absolute left-1 bottom-1 flex flex-row gap-1 rounded items-center pb-0.5 pl-0.5 z-100">
                   <Box
-                    className={`text-xs text-muted-foreground px-1.5 rounded ${bgToolsPanel}`}
+                    className={`text-[10px] leading-4 text-muted-foreground px-1 rounded ${bgToolsPanel}`}
                     title={t('Image size in pixels', { ns: 'common' })}
                   >
                     {clipboard.imageWidth}x{clipboard.imageHeight}
@@ -776,7 +804,7 @@ export function ClipboardHistoryQuickPasteRowComponent({
                 {isHovering || isSelected ? (
                   <div className={`flex ${bgToolsPanel}`} key="hover-panel">
                     {clipboard.timeAgoShort && (
-                      <Box className="text-xs text-muted-foreground rounded px-1">
+                      <Box className="text-[10px] leading-4 text-muted-foreground rounded px-1">
                         <ToolTip
                           text={format(clipboard.updatedAt, 'PPpp')}
                           delayDuration={2000}
@@ -793,33 +821,23 @@ export function ClipboardHistoryQuickPasteRowComponent({
                 ) : (
                   <div className={`${labelsOffset}`} key="labels-panel">
                     {clipboard.hasMaskedWords && (
-                      <Box
-                        className={`bg-slate-200 text-slate-700 dark:bg-slate-600 dark:text-slate-300 text-xs rounded-sm px-0.5`}
-                      >
-                        <Dot size={16} />
+                      <Box className={`${labelClassName} !px-0`}>
+                        <Dot size={14} />
                       </Box>
                     )}
 
                     {clipboard.isMasked && (
-                      <Box
-                        className={`bg-slate-200 text-slate-700 dark:bg-slate-600 dark:text-slate-300 text-xs rounded-sm px-1.5`}
-                      >
+                      <Box className={labelClassName}>
                         {t('Type:::Secret', { ns: 'common' })}
                       </Box>
                     )}
 
                     {clipboard.detectedLanguage && (
-                      <Box
-                        className={`bg-slate-200 text-slate-700 dark:bg-slate-600 dark:text-slate-300 text-xs rounded-sm px-1.5`}
-                      >
-                        {clipboard.detectedLanguage}
-                      </Box>
+                      <Box className={labelClassName}>{clipboard.detectedLanguage}</Box>
                     )}
 
                     {clipboard.isLink && (
-                      <Box
-                        className={`bg-slate-200 text-slate-700 dark:bg-slate-600 dark:text-slate-300 text-xs rounded-sm px-1.5`}
-                      >
+                      <Box className={labelClassName}>
                         {clipboard.isVideo
                           ? t('Type:::Video', { ns: 'common' })
                           : isEmailNotUrl(textValue)
@@ -831,17 +849,13 @@ export function ClipboardHistoryQuickPasteRowComponent({
                     )}
 
                     {clipboard.hasEmoji && (
-                      <Box
-                        className={`bg-slate-200 text-slate-700 dark:bg-slate-600 dark:text-slate-300 text-xs rounded-sm px-1.5`}
-                      >
+                      <Box className={labelClassName}>
                         {t('Type:::Emoji', { ns: 'common' })}
                       </Box>
                     )}
 
                     {clipboard.isImageData && (
-                      <Box
-                        className={`bg-slate-200 text-slate-700 dark:bg-slate-600 dark:text-slate-300 text-xs rounded-sm px-1.5`}
-                      >
+                      <Box className={labelClassName}>
                         {t('Type:::Image Base64', { ns: 'common' })}
                       </Box>
                     )}

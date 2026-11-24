@@ -533,8 +533,12 @@ async fn open_quickpaste_window(app_handle: tauri::AppHandle, title: String) -> 
     return Ok(());
   }
 
-  let window_width = 310.0;
-  let window_height = 420.0;
+  // Compact panel (similar in size to the Windows Win+V clipboard panel).
+  // The user can make it smaller, down to the min size below.
+  let window_width = 300.0;
+  let window_height = 400.0;
+  let window_min_width = 240.0;
+  let window_min_height = 200.0;
 
   let main_window = app_handle.get_window("main").unwrap();
   let is_main_window_visible = main_window.is_visible().unwrap();
@@ -554,7 +558,7 @@ async fn open_quickpaste_window(app_handle: tauri::AppHandle, title: String) -> 
   .maximizable(false)
   .resizable(true)
   .max_inner_size(500.0, 800.0)
-  .min_inner_size(window_width, window_height)
+  .min_inner_size(window_min_width, window_min_height)
   .minimizable(false)
   .inner_size(window_width, window_height)
   .visible(false);

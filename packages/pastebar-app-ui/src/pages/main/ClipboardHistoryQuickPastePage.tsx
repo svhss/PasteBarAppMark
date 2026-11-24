@@ -6,8 +6,7 @@ import { appWindow } from '@tauri-apps/api/window'
 import { isKeyAltPressed, isKeyCtrlPressed, settingsStoreAtom } from '~/store'
 import { useAtomValue } from 'jotai'
 import { throttle } from 'lodash-es'
-import { ArrowDownFromLine, ArrowUpToLine, Search } from 'lucide-react'
-import { OverlayScrollbarsComponent } from 'overlayscrollbars-react'
+import { History, Pin, Search, X } from 'lucide-react'
 import { Prism } from 'prism-react-renderer'
 import { useHotkeys } from 'react-hotkeys-hook'
 import { useTranslation } from 'react-i18next'
@@ -27,26 +26,35 @@ import {
   useFindClipboardHistory,
   useGetPinnedClipboardHistories,
   useInfiniteClipboardHistory,
-  useMovePinnedClipboardHistoryUpDown,
 } from '~/hooks/queries/use-history-items'
 import {
   useCopyPasteHistoryItem,
   usePasteHistoryItem,
 } from '~/hooks/use-copypaste-history-item'
 import { useDebounce } from '~/hooks/use-debounce'
-import { useSignal } from '~/hooks/use-signal'
+
+import { ClipboardHistoryItem } from '~/types/history'
 
 import { ClipboardHistoryQuickPasteRow } from '../components/ClipboardHistory/ClipboardHistoryQuickPasteRow'
+
+type QuickPasteTab = 'history' | 'pinned'
 
 const altKeys = ['Alt', 'Meta']
 const ctrlKeys = ['Control']
 const keyUp = ['ArrowUp', 'Up']
+const keyDown = ['ArrowDown', 'Down']
+const keyLeft = ['ArrowLeft', 'Left']
+const keyRight = ['ArrowRight', 'Right']
 const keyPageUp = ['PageUp']
 const keyPageDown = ['PageDown']
-const keyDown = ['ArrowDown', 'Down']
 const keyEnter = ['Enter']
 const keyEscape = ['Escape']
 const keyHome = ['Home']
+const keyEnd = ['End']
+const keyTab = ['Tab']
+
+// Estimated row height before the real height is measured
+const DEFAULT_ROW_HEIGHT = 34
 
 const loadPrismComponents = async () => {
   // @ts-expect-error - global Prism
@@ -113,10 +121,18 @@ async function invokeCopyPasteHistoryItem(
   }
 }
 
+function matchesSearch(item: ClipboardHistoryItem, term: string) {
+  return (
+    (item.value ?? '').toLowerCase().includes(term) ||
+    (item.title ?? '').toLowerCase().includes(term)
+  )
+}
+
 export default function ClipboardHistoryQuickPastePage() {
   const [savingItem, setSavingItem] = useState<UniqueIdentifier | null>(null)
-  const isShowSearch = useSignal(false)
-  const { movePinnedClipboardHistoryUpDown } = useMovePinnedClipboardHistoryUpDown()
+  const [isShowSearch, setIsShowSearch] = useState(false)
+  const [activeTab, setActiveTab] = useState<QuickPasteTab>('history')
+  const isPinnedTab = activeTab === 'pinned'
 
   const {
     isAutoPreviewLinkCardsEnabled,
@@ -129,10 +145,6 @@ export default function ClipboardHistoryQuickPastePage() {
     historyPreviewLineLimit,
   } = useAtomValue(settingsStoreAtom)
 
-  const [historyFilters, setHistoryFilters] = useState<string[]>([])
-  const [codeFilters, setCodeFilters] = useState<string[]>([])
-  const [appFilters, setAppFilters] = useState<string[]>([])
-
   const historyListSimpleBarRef = useRef<HTMLDivElement | null>(null)
 
   const [brokenImageItems, setBrokenImageItems] = useState<UniqueIdentifier[]>([])
@@ -143,18 +155,15 @@ export default function ClipboardHistoryQuickPastePage() {
 
   const { t } = useTranslation()
 
-  const [isShowHistoryPinned, setIsShowHistoryPinned] = useState(false)
-
   const { themeDark } = useAtomValue(themeStoreAtom)
-  const { ref: pinnedPanelRef, height: pinnedPanelHeight } = useResizeObserver()
-  const { ref: historyPanelRef, height: historyPanelHeight } = useResizeObserver()
+  const { ref: listWrapperRef, height: listHeight } = useResizeObserver<HTMLDivElement>()
 
   const { pinnedClipboardHistory } = useGetPinnedClipboardHistories()
 
   const isDark = themeDark()
 
   // Hooks for copy and paste operations
-  const [copiedHistoryItem, handleCopyHistoryItem] = useCopyPasteHistoryItem({
+  const [, handleCopyHistoryItem] = useCopyPasteHistoryItem({
     delay: 100,
     onCopied: () => {
       if (isQuickPasteAutoClose) {
@@ -163,17 +172,15 @@ export default function ClipboardHistoryQuickPastePage() {
     },
   })
 
-  const [pastedHistoryItem, pastingCountDown, handlePasteHistoryItem] =
-    usePasteHistoryItem({
-      delay: 100,
-      onPasted: () => {
-        if (isQuickPasteAutoClose) {
-          appWindow?.close()
-        }
-      },
-    })
+  const [, , handlePasteHistoryItem] = usePasteHistoryItem({
+    delay: 100,
+    onPasted: () => {
+      if (isQuickPasteAutoClose) {
+        appWindow?.close()
+      }
+    },
+  })
 
-  // Create wrapper functions for the row component
   const onCopyHistoryItem = useCallback(
     (historyId: UniqueIdentifier) => {
       handleCopyHistoryItem(historyId)
@@ -209,10 +216,12 @@ export default function ClipboardHistoryQuickPastePage() {
     clipboardHistoryIdsURLErrors,
     generateLinkMetaData,
     removeLinkMetaData,
+    clipboardHistory: allClipboardHistory,
+    foundClipboardHistory,
   } = useAtomValue(clipboardHistoryStoreAtom)
 
-  const keyboardIndexSelectedItem = useSignal<number>(0)
-  const keyboardIndexSelectedPinnedItem = useSignal<number>(-1)
+  const [selectedHistoryIndex, setSelectedHistoryIndex] = useState(0)
+  const [selectedPinnedIndex, setSelectedPinnedIndex] = useState(0)
 
   const [isPrismLoaded, setPrismLoaded] = useState(false)
 
@@ -223,12 +232,6 @@ export default function ClipboardHistoryQuickPastePage() {
     invalidateClipboardHistoryQuery,
     fetchNextClipboardHistoryPage,
   } = useInfiniteClipboardHistory()
-
-  const {
-    clipboardHistory: allClipboardHistory,
-    newClipboardHistoryCount,
-    foundClipboardHistory,
-  } = useAtomValue(clipboardHistoryStoreAtom)
 
   const [searchTerm, setSearchTerm] = useState('')
   const [currentTopItemTimeAgo, setCurrentTopItemTimeAgo] = useState('')
@@ -249,79 +252,65 @@ export default function ClipboardHistoryQuickPastePage() {
     { leading: true }
   )
 
-  const hasSearchOrFilter = useMemo(() => {
-    return debouncedSearchTerm.length > 1 || historyFilters.length > 0
-  }, [debouncedSearchTerm, historyFilters])
+  const hasHistorySearch = debouncedSearchTerm.length > 1
 
-  const clipboardHistory = hasSearchOrFilter ? foundClipboardHistory : allClipboardHistory
+  const clipboardHistory = hasHistorySearch ? foundClipboardHistory : allClipboardHistory
 
   const { refetchFindClipboardHistory } = useFindClipboardHistory({
     query: debouncedSearchTerm,
-    filters: historyFilters,
-    codeFilters,
-    appFilters,
   })
 
-  const keyboardSelectedItemId = useMemo(() => {
-    if (keyboardIndexSelectedItem.value >= 0) {
-      setIsShowHistoryPinned(false)
-      keyboardIndexSelectedPinnedItem.value = -1
-    }
+  const sortedPinnedHistory = useMemo(
+    () =>
+      [...pinnedClipboardHistory].sort(
+        (a, b) => a.pinnedOrderNumber - b.pinnedOrderNumber
+      ),
+    [pinnedClipboardHistory]
+  )
 
-    return clipboardHistory.length > 0 &&
-      clipboardHistory[keyboardIndexSelectedItem.value]
-      ? clipboardHistory[keyboardIndexSelectedItem.value].historyId
-      : null
-  }, [
-    keyboardIndexSelectedItem.value,
-    clipboardHistory,
-    keyboardIndexSelectedPinnedItem.value,
-  ])
-
-  const keyboardSelectedPinnedItemId = useMemo(() => {
-    if (keyboardIndexSelectedPinnedItem.value > 0) {
-      keyboardIndexSelectedItem.value = -1
+  // Pinned items are few, so the search filters them here (no backend call)
+  const pinnedItems = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase()
+    if (!term) {
+      return sortedPinnedHistory
     }
-    return pinnedClipboardHistory.length > 0 &&
-      pinnedClipboardHistory[keyboardIndexSelectedPinnedItem.value]
-      ? pinnedClipboardHistory[keyboardIndexSelectedPinnedItem.value].historyId
-      : null
-  }, [
-    keyboardIndexSelectedPinnedItem.value,
-    pinnedClipboardHistory,
-    keyboardIndexSelectedItem.value,
-  ])
+    return sortedPinnedHistory.filter(item => matchesSearch(item, term))
+  }, [sortedPinnedHistory, searchTerm])
+
+  const activeItems = isPinnedTab ? pinnedItems : clipboardHistory
+  const selectedIndex = isPinnedTab ? selectedPinnedIndex : selectedHistoryIndex
+  const setSelectedIndex = isPinnedTab ? setSelectedPinnedIndex : setSelectedHistoryIndex
+
+  const selectedItemId = activeItems[selectedIndex]?.historyId ?? null
+
+  const hasActiveSearch = isPinnedTab ? searchTerm.trim().length > 0 : hasHistorySearch
 
   const doRefetchFindClipboardHistory = useCallback(() => {
-    if (hasSearchOrFilter) {
+    if (hasHistorySearch) {
       refetchFindClipboardHistory()
-      keyboardIndexSelectedPinnedItem.value = -1
-      keyboardIndexSelectedItem.value = 0
+      setSelectedHistoryIndex(0)
     }
-  }, [
-    hasSearchOrFilter,
-    keyboardIndexSelectedPinnedItem.value,
-    keyboardIndexSelectedItem.value,
-  ])
+  }, [hasHistorySearch])
+
+  const pasteItemAtIndex = (index: number) => {
+    const itemId = activeItems[index]?.historyId
+    if (!itemId) {
+      return
+    }
+    invokeCopyPasteHistoryItem(
+      itemId,
+      isQuickPasteCopyOnly,
+      isQuickPasteAutoClose,
+      handleCopyHistoryItem,
+      handlePasteHistoryItem
+    )
+  }
 
   useHotkeys(
     [...Array(10).keys()].map(i => `ctrl+${i.toString()}`),
     e => {
       e.preventDefault()
-      const index = e.key === '0' ? 9 : Number(e.key) - 1
-      const itemId = clipboardHistory[Number(index)]?.historyId
-
-      if (!itemId) {
-        return
-      }
-
-      invokeCopyPasteHistoryItem(
-        itemId,
-        isQuickPasteCopyOnly,
-        isQuickPasteAutoClose,
-        handleCopyHistoryItem,
-        handlePasteHistoryItem
-      )
+      pasteItemAtIndex(e.key === '0' ? 9 : Number(e.key) - 1)
     },
     {
       enableOnFormTags: ['input'],
@@ -332,20 +321,7 @@ export default function ClipboardHistoryQuickPastePage() {
     [...Array(10).keys()].map(i => `meta+${i.toString()}`),
     e => {
       e.preventDefault()
-      const index = e.key === '0' ? 9 : Number(e.key) - 1
-      const itemId = clipboardHistory[Number(index)]?.historyId
-
-      if (!itemId) {
-        return
-      }
-
-      invokeCopyPasteHistoryItem(
-        itemId,
-        isQuickPasteCopyOnly,
-        isQuickPasteAutoClose,
-        handleCopyHistoryItem,
-        handlePasteHistoryItem
-      )
+      pasteItemAtIndex(e.key === '0' ? 9 : Number(e.key) - 1)
     },
     {
       enabled: !isWindows,
@@ -353,17 +329,32 @@ export default function ClipboardHistoryQuickPastePage() {
     }
   )
 
-  const toggleSearch = (e: KeyboardEvent) => {
-    e.preventDefault()
-    if (keyboardIndexSelectedPinnedItem.value > 0) {
-      keyboardIndexSelectedPinnedItem.value = -1
-      keyboardIndexSelectedItem.value = 0
+  const toggleSearch = (e?: KeyboardEvent) => {
+    e?.preventDefault()
+    if (isShowSearch) {
+      setSearchTerm('')
     }
-    isShowSearch.value = !isShowSearch.value
+    setIsShowSearch(!isShowSearch)
+  }
+
+  const switchTab = (tab?: QuickPasteTab) => {
+    const nextTab = tab ?? (isPinnedTab ? 'history' : 'pinned')
+    if (nextTab !== activeTab) {
+      setActiveTab(nextTab)
+      setCurrentTopItemTimeAgo('')
+    }
+  }
+
+  const clearSearch = () => {
+    setSearchTerm('')
+    if (searchHistoryInputRef?.current) {
+      searchHistoryInputRef.current.value = ''
+      searchHistoryInputRef.current.focus()
+    }
   }
 
   useEffect(() => {
-    if (searchHistoryInputRef?.current && isShowSearch.value) {
+    if (searchHistoryInputRef?.current && isShowSearch) {
       searchHistoryInputRef?.current?.focus()
       // Set cursor position to end when search is activated with initial text
       if (searchTerm.length > 0) {
@@ -375,7 +366,7 @@ export default function ClipboardHistoryQuickPastePage() {
         })
       }
     }
-  }, [isShowSearch.value])
+  }, [isShowSearch])
 
   useHotkeys(['ctrl+f', 'meta+f', 'ctrl+k', 'meta+k', '/'], toggleSearch)
 
@@ -414,18 +405,16 @@ export default function ClipboardHistoryQuickPastePage() {
   }, [historyListSimpleBarRef.current])
 
   useEffect(() => {
-    if (
-      debouncedSearchTerm.length > 1 ||
-      historyFilters.length > 0 ||
-      appFilters.length > 0 ||
-      codeFilters.length > 0
-    ) {
+    setSelectedHistoryIndex(0)
+    if (hasHistorySearch) {
       refetchFindClipboardHistory()
       scrollToTopHistoryList()
-      keyboardIndexSelectedPinnedItem.value = -1
-      keyboardIndexSelectedItem.value = 0
     }
-  }, [debouncedSearchTerm, historyFilters, codeFilters, appFilters])
+  }, [debouncedSearchTerm])
+
+  useEffect(() => {
+    setSelectedPinnedIndex(0)
+  }, [searchTerm])
 
   const loadMoreClipBoardHistory = async () => {
     if (!isClipboardHistoryFetchingNextPage) {
@@ -434,7 +423,7 @@ export default function ClipboardHistoryQuickPastePage() {
   }
 
   function getRowHeight(index: number): number {
-    return rowHeights.current[index] || 60
+    return rowHeights.current[index] || DEFAULT_ROW_HEIGHT
   }
 
   function setRowHeight(index: number, size: number) {
@@ -487,6 +476,7 @@ export default function ClipboardHistoryQuickPastePage() {
     return ctrlKeys.includes(event.key)
   }
 
+  // eslint-disable-next-line sonarjs/cognitive-complexity
   async function downHandler(event: KeyboardEvent) {
     if (isScrolling) {
       setIsScrolling(false)
@@ -501,7 +491,7 @@ export default function ClipboardHistoryQuickPastePage() {
 
     // Auto-activate search when typing letters or numbers
     if (
-      !isShowSearch.value &&
+      !isShowSearch &&
       !event.ctrlKey &&
       !event.metaKey &&
       !event.altKey &&
@@ -509,162 +499,103 @@ export default function ClipboardHistoryQuickPastePage() {
       /^[\p{L}\p{N}]$/u.test(event.key)
     ) {
       event.preventDefault()
-      isShowSearch.value = true
+      setIsShowSearch(true)
       setSearchTerm(event.key)
-      // Focus will be handled by the useEffect that watches searchHistoryInputRef
+      // Focus will be handled by the useEffect that watches isShowSearch
       return
     }
 
-    // Handle Escape key before the early return for search input
     if (keyEscape.includes(event.key)) {
       event.preventDefault()
-      if (isShowSearch.value && searchTerm.length > 0) {
+      if (isShowSearch && searchTerm.length > 0) {
         setSearchTerm('')
-      } else if (isShowSearch.value && searchTerm.length === 0) {
-        isShowSearch.value = false
-      } else if (!isShowSearch.value) {
+      } else if (isShowSearch && searchTerm.length === 0) {
+        setIsShowSearch(false)
+      } else if (!isShowSearch) {
         appWindow?.close()
       }
       return
     }
 
-    // If search is active and input is focused, only process navigation keys
-    if (isShowSearch.value && document.activeElement === searchHistoryInputRef?.current) {
-      // Allow navigation keys to be processed
-      if (
-        !keyUp.includes(event.key) &&
-        !keyDown.includes(event.key) &&
-        !keyPageUp.includes(event.key) &&
-        !keyPageDown.includes(event.key) &&
-        !keyHome.includes(event.key) &&
-        !keyEnter.includes(event.key)
-      ) {
-        return
-      }
+    const isSearchFocused =
+      isShowSearch && document.activeElement === searchHistoryInputRef?.current
+
+    // Switch tabs: Tab / Shift+Tab always, Left / Right when the search field does not have focus
+    if (keyTab.includes(event.key)) {
+      event.preventDefault()
+      switchTab()
+      return
     }
 
+    if (!isSearchFocused && keyLeft.includes(event.key)) {
+      event.preventDefault()
+      switchTab('history')
+      return
+    }
+
+    if (!isSearchFocused && keyRight.includes(event.key)) {
+      event.preventDefault()
+      switchTab('pinned')
+      return
+    }
+
+    // If search is active and input is focused, only process navigation keys
+    if (
+      isSearchFocused &&
+      !keyUp.includes(event.key) &&
+      !keyDown.includes(event.key) &&
+      !keyPageUp.includes(event.key) &&
+      !keyPageDown.includes(event.key) &&
+      !keyEnter.includes(event.key)
+    ) {
+      return
+    }
+
+    const lastIndex = activeItems.length - 1
+
     if (keyHome.includes(event.key)) {
-      if (!isShowSearch.value) {
-        event.preventDefault()
-      } else {
-        return
-      }
-      keyboardIndexSelectedPinnedItem.value = -1
-      const prevSelectedItem = clipboardHistory[0]?.historyId
-      if (prevSelectedItem) {
-        keyboardIndexSelectedItem.value = 0
+      event.preventDefault()
+      setSelectedIndex(0)
+      if (!isPinnedTab) {
         scrollToTopHistoryList()
       }
       return
     }
 
+    if (keyEnd.includes(event.key)) {
+      event.preventDefault()
+      setSelectedIndex(Math.max(lastIndex, 0))
+      return
+    }
+
     if (keyUp.includes(event.key)) {
       event.preventDefault()
-      if (keyboardIndexSelectedPinnedItem.value > -1) {
-        const prevSelectedPinnedItem =
-          pinnedClipboardHistory[keyboardIndexSelectedPinnedItem.value - 1]?.historyId
-
-        keyboardIndexSelectedItem.value = -1
-        if (prevSelectedPinnedItem) {
-          keyboardIndexSelectedPinnedItem.value =
-            keyboardIndexSelectedPinnedItem.value - 1
-        } else {
-          keyboardIndexSelectedPinnedItem.value = 0
-        }
-        return
-      }
-      const prevSelectedItem =
-        clipboardHistory[keyboardIndexSelectedItem.value - 1]?.historyId
-      if (prevSelectedItem) {
-        keyboardIndexSelectedItem.value -= 1
-      } else {
-        if (pinnedClipboardHistory.length > 0 && !isShowSearch.value) {
-          if (!isShowHistoryPinned) {
-            setIsShowHistoryPinned(true)
-          }
-          keyboardIndexSelectedItem.value = -1
-          keyboardIndexSelectedPinnedItem.value = pinnedClipboardHistory.length - 1
-        } else {
-          keyboardIndexSelectedItem.value = 0
-        }
-      }
+      setSelectedIndex(Math.max(selectedIndex - 1, 0))
       return
     }
 
     if (keyDown.includes(event.key)) {
       event.preventDefault()
-      if (keyboardIndexSelectedPinnedItem.value > -1) {
-        const nextSelectedPinnedItem =
-          pinnedClipboardHistory[keyboardIndexSelectedPinnedItem.value + 1]?.historyId
-
-        if (nextSelectedPinnedItem) {
-          keyboardIndexSelectedItem.value = -1
-          keyboardIndexSelectedPinnedItem.value += 1
-        } else {
-          keyboardIndexSelectedPinnedItem.value = -1
-          keyboardIndexSelectedItem.value = 0
-        }
-        return
-      }
-
-      const nextSelectedItem =
-        clipboardHistory[keyboardIndexSelectedItem.value + 1]?.historyId
-
-      if (nextSelectedItem) {
-        keyboardIndexSelectedItem.value += 1
-      } else {
-        if (keyboardIndexSelectedItem.value < 0 && pinnedClipboardHistory.length > 0) {
-          keyboardIndexSelectedItem.value += 1
-        }
-      }
+      setSelectedIndex(Math.max(Math.min(selectedIndex + 1, lastIndex), 0))
       return
     }
 
     if (keyPageUp.includes(event.key)) {
       event.preventDefault()
-      keyboardIndexSelectedPinnedItem.value = -1
-      const prevSelectedItem =
-        clipboardHistory[keyboardIndexSelectedItem.value - 5]?.historyId
-      if (prevSelectedItem) {
-        keyboardIndexSelectedItem.value -= 5
-      } else {
-        keyboardIndexSelectedItem.value = 0
-      }
+      setSelectedIndex(Math.max(selectedIndex - 5, 0))
       return
     }
 
     if (keyPageDown.includes(event.key)) {
       event.preventDefault()
-      keyboardIndexSelectedPinnedItem.value = -1
-      const nextSelectedItem =
-        clipboardHistory[keyboardIndexSelectedItem.value + 5]?.historyId
-
-      if (nextSelectedItem) {
-        keyboardIndexSelectedItem.value += 5
-      } else {
-        keyboardIndexSelectedItem.value = clipboardHistory.length - 1
-      }
+      setSelectedIndex(Math.max(Math.min(selectedIndex + 5, lastIndex), 0))
       return
     }
 
     if (keyEnter.includes(event.key)) {
       event.preventDefault()
-      const selectedItemId =
-        keyboardIndexSelectedPinnedItem.value > -1
-          ? pinnedClipboardHistory[keyboardIndexSelectedPinnedItem.value]?.historyId
-          : clipboardHistory[keyboardIndexSelectedItem.value]?.historyId
-
-      if (selectedItemId) {
-        invokeCopyPasteHistoryItem(
-          selectedItemId,
-          isQuickPasteCopyOnly,
-          isQuickPasteAutoClose,
-          handleCopyHistoryItem,
-          handlePasteHistoryItem
-        )
-      }
+      pasteItemAtIndex(selectedIndex)
     }
-    return
   }
 
   function upHandler(event: KeyboardEvent) {
@@ -692,395 +623,318 @@ export default function ClipboardHistoryQuickPastePage() {
       window.removeEventListener('focus', focusHandler)
     }
   }, [
-    clipboardHistory,
-    pinnedClipboardHistory,
-    isShowSearch.value,
+    activeItems,
+    activeTab,
+    isShowSearch,
     searchTerm,
-    keyboardIndexSelectedItem.value,
-    keyboardIndexSelectedPinnedItem.value,
+    selectedIndex,
+    isScrolling,
+    isQuickPasteCopyOnly,
+    isQuickPasteAutoClose,
   ])
+
+  // Props that are the same for rows in both tabs
+  const getSharedRowProps = (item: ClipboardHistoryItem) => {
+    const historyId = item.historyId
+    return {
+      clipboard: item,
+      isDark,
+      isWindows,
+      isScrolling,
+      isKeyboardSelected: selectedItemId === historyId,
+      hasClipboardHistoryURLErrors: clipboardHistoryIdsURLErrors.includes(historyId),
+      hasGenerateLinkMetaDataInProgress:
+        clipboardHistoryGenerateLinkMetaDataInProgress.includes(historyId),
+      addToClipboardHistoryIdsURLErrors,
+      addToGenerateLinkMetaDataInProgress,
+      removeToGenerateLinkMetaDataInProgress,
+      isLinkCardPreviewEnabled: isAutoPreviewLinkCardsEnabled,
+      isAutoGenerateLinkCardsEnabled,
+      generateLinkMetaData,
+      removeLinkMetaData,
+      showSelectHistoryItems: false,
+      setSelectHistoryItem: () => {},
+      onCopy: onCopyHistoryItem,
+      onCopyPaste: onCopyPasteHistoryItem,
+      isSaved: historyId === savingItem,
+      setSavingItem,
+      isDeleting: false,
+      isSelected: false,
+      setBrokenImageItem,
+      isBrokenImage: brokenImageItems.includes(historyId),
+      // Compact layout: no "x minutes ago" header between rows (time shows on hover)
+      showTimeAgo: false,
+      isExpanded: expandedItems.includes(historyId),
+      isWrapText: wrappedTextItems.includes(historyId),
+      searchTerm: !hasActiveSearch ? '' : isPinnedTab ? searchTerm : debouncedSearchTerm,
+      invalidateClipboardHistoryQuery: () => {
+        invalidateClipboardHistoryQuery()
+        doRefetchFindClipboardHistory()
+      },
+      setExpanded,
+      setWrapText,
+      isSingleClickToCopyPaste:
+        isSingleClickToCopyPaste || isSingleClickToCopyPasteQuickWindow,
+      isSingleClickKeyboardFocus,
+      historyPreviewLineLimit,
+    }
+  }
+
+  const foundCount = isPinnedTab ? pinnedItems.length : clipboardHistory.length
+
+  const isHistoryEmpty =
+    !isClipboardInfiniteHistoryLoading &&
+    infiniteClipboardHistory?.pages?.flat().length === 0
 
   return (
     isPrismLoaded && (
-      <Box
-        ref={historyPanelRef}
-        className="h-[100vh] flex flex-col bg-gray-50 dark:bg-gray-800 dark:border-gray-700 dark:shadow-slate-700/[.8] pb-6 pt-4 px-3 pr-3"
-      >
-        <Box className="flex flex-col relative" id="side-panel_tour">
-          {isShowSearch.value && (
-            <SearchInput
-              key="search-input"
-              setSearchTerm={setSearchTerm}
-              searchTerm={searchTerm}
-              searchHistoryInputRef={searchHistoryInputRef}
-              t={t}
+      <Box className="h-[100vh] flex flex-col bg-gray-50 dark:bg-gray-800 p-1.5 pb-1">
+        {/* Tab bar, similar to the top row of the Windows clipboard panel (Win+V) */}
+        <Flex className="shrink-0 items-center gap-1 mb-1">
+          <Flex
+            className="flex-1 gap-0.5 p-0.5 rounded-md bg-slate-200/70 dark:bg-slate-900/70"
+            role="tablist"
+          >
+            <QuickPasteTabButton
+              isActive={!isPinnedTab}
+              onClick={() => switchTab('history')}
+              icon={<History size={13} />}
+              label={t('History', { ns: 'common' })}
             />
-          )}
-          {hasSearchOrFilter ? (
-            <Box className="cursor-pointer absolute top-[46px] z-100 animate-in fade-in fade-out flex justify-center w-full pointer-events-none">
-              <ToolTip
-                text={t('Clear found results and filters', { ns: 'common' })}
-                className="animate-in fade-in fade-out duration-300"
-                isCompact
-                delayDuration={2000}
-                side="top"
-                onClick={() => {
-                  setSearchTerm('')
-                  setHistoryFilters([])
-                  setCodeFilters([])
-                  setAppFilters([])
-                  if (
-                    searchHistoryInputRef?.current &&
-                    searchHistoryInputRef.current.value
-                  ) {
-                    searchHistoryInputRef.current.value = ''
-                    searchHistoryInputRef?.current?.focus()
-                  }
-                }}
-                sideOffset={10}
+            <QuickPasteTabButton
+              isActive={isPinnedTab}
+              onClick={() => switchTab('pinned')}
+              icon={<Pin size={13} />}
+              label={t('Pinned', { ns: 'common' })}
+              count={sortedPinnedHistory.length}
+            />
+          </Flex>
+          <ButtonGhost
+            className={`h-7 w-7 p-0 shrink-0 rounded-md ${
+              isShowSearch
+                ? 'bg-slate-200 dark:bg-slate-700'
+                : 'hover:bg-slate-200/70 dark:hover:bg-slate-700/70'
+            }`}
+            title={`${t('Find in history', { ns: 'dashboard' })} (Ctrl+F)`}
+            onClick={() => toggleSearch()}
+          >
+            <Search size={14} />
+          </ButtonGhost>
+        </Flex>
+
+        {isShowSearch && (
+          <SearchInput
+            key="search-input"
+            setSearchTerm={setSearchTerm}
+            searchTerm={searchTerm}
+            searchHistoryInputRef={searchHistoryInputRef}
+            onClear={clearSearch}
+            resultText={
+              hasActiveSearch
+                ? foundCount
+                  ? `${foundCount < 100 ? foundCount : '100+'} ${t('found', {
+                      ns: 'common',
+                    })}`
+                  : t('Nothing found', { ns: 'common' })
+                : ''
+            }
+            placeholder={
+              isPinnedTab
+                ? `${t('Pinned', { ns: 'common' })}...`
+                : `${t('Find in history', { ns: 'dashboard' })}...`
+            }
+          />
+        )}
+
+        <div
+          ref={listWrapperRef}
+          className="relative flex-1 min-h-0"
+          id="quick-paste-history-list"
+        >
+          {isPinnedTab ? (
+            pinnedItems.length > 0 ? (
+              <div
+                className="overflow-y-auto overflow-x-hidden pr-0.5"
+                style={{ height: listHeight ?? 300 }}
               >
-                <Text className="text-xs text-center dark:text-slate-800 bg-blue-200 dark:bg-blue-400 rounded-full px-3 cursor-pointer pointer-events-auto">
-                  {clipboardHistory.length ? (
-                    <>
-                      {clipboardHistory.length < 100 ? clipboardHistory.length : '100+'}{' '}
-                      {t('found', { ns: 'common' })}
-                    </>
-                  ) : (
-                    <>{t('Nothing found', { ns: 'common' })}</>
-                  )}
-                </Text>
-              </ToolTip>
-            </Box>
-          ) : (
-            pinnedClipboardHistory.length > 0 &&
-            !isShowSearch.value && (
-              <Box
-                ref={pinnedPanelRef}
-                className={`px-2 py-2 pb-0 bg-orange-200/70 dark:bg-orange-900/60 mt-0 my-2 rounded-md relative`}
-              >
-                <OverlayScrollbarsComponent
-                  defer
-                  style={{
-                    maxHeight: 200,
-                  }}
-                  options={{
-                    overflow: {
-                      x: 'hidden',
-                      y: 'scroll',
-                    },
-                    scrollbars: {
-                      theme: isDark ? 'os-theme-light' : 'os-theme-dark',
-                      autoHide: 'move',
-                    },
-                  }}
-                >
-                  <Box className={`flex flex-col gap-1 relative`}>
-                    {isShowHistoryPinned &&
-                      pinnedClipboardHistory
-                        .sort((a, b) => a.pinnedOrderNumber - b.pinnedOrderNumber)
-                        .map((item, index) => {
-                          const historyId = item.historyId
-                          return (
-                            <ClipboardHistoryQuickPasteRow
-                              isPinnedTop
-                              isScrolling={isScrolling}
-                              setKeyboardSelected={id => {
-                                const index = pinnedClipboardHistory.findIndex(
-                                  item => item.historyId === id
-                                )
-                                if (index > -1) {
-                                  keyboardIndexSelectedPinnedItem.value = index
-                                  keyboardIndexSelectedItem.value = -1
-                                }
-                              }}
-                              isKeyboardSelected={
-                                keyboardSelectedPinnedItemId === historyId
-                              }
-                              hasClipboardHistoryURLErrors={clipboardHistoryIdsURLErrors.includes(
-                                historyId
-                              )}
-                              showSelectHistoryItems={false}
-                              setHistoryFilters={setHistoryFilters}
-                              setAppFilters={setAppFilters}
-                              addToClipboardHistoryIdsURLErrors={
-                                addToClipboardHistoryIdsURLErrors
-                              }
-                              isLinkCardPreviewEnabled={isAutoPreviewLinkCardsEnabled}
-                              isAutoGenerateLinkCardsEnabled={
-                                isAutoGenerateLinkCardsEnabled
-                              }
-                              addToGenerateLinkMetaDataInProgress={
-                                addToGenerateLinkMetaDataInProgress
-                              }
-                              removeToGenerateLinkMetaDataInProgress={
-                                removeToGenerateLinkMetaDataInProgress
-                              }
-                              hasGenerateLinkMetaDataInProgress={clipboardHistoryGenerateLinkMetaDataInProgress.includes(
-                                historyId
-                              )}
-                              isPinnedTopFirst={index === 0}
-                              isDisabledPinnedMoveUp={index === 0}
-                              isDisabledPinnedMoveDown={
-                                index === pinnedClipboardHistory.length - 1
-                              }
-                              onMovePinnedUpDown={move => {
-                                movePinnedClipboardHistoryUpDown(move)
-                              }}
-                              setSelectHistoryItem={() => {}}
-                              onCopy={onCopyHistoryItem}
-                              onCopyPaste={onCopyPasteHistoryItem}
-                              isSaved={historyId === savingItem}
-                              setSavingItem={setSavingItem}
-                              isDeleting={false}
-                              isSelected={false}
-                              isWindows={isWindows}
-                              setBrokenImageItem={setBrokenImageItem}
-                              isBrokenImage={brokenImageItems.includes(historyId)}
-                              showTimeAgo={false}
-                              isExpanded={expandedItems.includes(historyId)}
-                              isWrapText={wrappedTextItems.includes(historyId)}
-                              searchTerm={hasSearchOrFilter ? debouncedSearchTerm : ''}
-                              invalidateClipboardHistoryQuery={() => {
-                                invalidateClipboardHistoryQuery()
-                                doRefetchFindClipboardHistory()
-                              }}
-                              setExpanded={setExpanded}
-                              setWrapText={setWrapText}
-                              isDark={isDark}
-                              setRowHeight={setRowHeight}
-                              clipboard={item}
-                              removeLinkMetaData={removeLinkMetaData}
-                              generateLinkMetaData={generateLinkMetaData}
-                              isSingleClickToCopyPaste={
-                                isSingleClickToCopyPaste ||
-                                isSingleClickToCopyPasteQuickWindow
-                              }
-                              historyPreviewLineLimit={historyPreviewLineLimit}
-                            />
-                          )
-                        })}
-                  </Box>
-                </OverlayScrollbarsComponent>
-                {!isShowHistoryPinned ? (
-                  <Flex className="justify-center">
-                    <ButtonGhost
-                      className={`hover:underline ${
-                        isShowHistoryPinned ? 'h-[30px]' : 'h-[26px]'
-                      } group !text-orange-500/80 dark:!text-orange-400/80 hover:!text-orange-400 hover:bg-transparent dark:hover:bg-transparent ${
-                        !isShowHistoryPinned ? 'pb-1' : ''
-                      }`}
-                      title={
-                        isShowHistoryPinned
-                          ? t('Hide pinned history', { ns: 'history' })
-                          : t('View pinned history', { ns: 'history' })
+                {pinnedItems.map((item, index) => (
+                  <ClipboardHistoryQuickPasteRow
+                    key={item.historyId}
+                    {...getSharedRowProps(item)}
+                    isPinnedTop
+                    isPinnedTopFirst={index === 0}
+                    shortcutIndex={index}
+                    setKeyboardSelected={id => {
+                      const index = pinnedItems.findIndex(item => item.historyId === id)
+                      if (index > -1) {
+                        setSelectedPinnedIndex(index)
                       }
-                      onClick={() => {
-                        setIsShowHistoryPinned(!isShowHistoryPinned)
-                      }}
-                    >
-                      <Text className="!font-medium text-xs !text-orange-500/80 dark:!text-orange-400/80 hover:!text-orange-400 mr-1">
-                        {pinnedClipboardHistory.length}{' '}
-                        {t('Pinned', {
-                          ns: 'common',
-                          count: pinnedClipboardHistory.length,
-                        })}
-                      </Text>
-                      {isShowHistoryPinned ? (
-                        <ArrowUpToLine
-                          size={13}
-                          className="group-hover:opacity-100 opacity-0"
-                        />
-                      ) : (
-                        <ArrowDownFromLine
-                          size={13}
-                          className="group-hover:opacity-100 opacity-0"
-                        />
-                      )}
-                    </ButtonGhost>
-                  </Flex>
-                ) : (
-                  <Box className="mb-2" />
-                )}
-              </Box>
-            )
-          )}
-
-          <Box>
-            {clipboardHistory.length > 0 || hasSearchOrFilter ? (
-              <div className="relative" id="quick-paste-history-list">
-                {currentTopItemTimeAgo && (
-                  <Box
-                    className={`${
-                      newClipboardHistoryCount > 0 ? 'top-9' : 'top-1'
-                    } absolute z-100 animate-in fade-in fade-out duration-300 flex justify-center w-full ml-[-5px] pointer-events-none`}
-                  >
-                    <ToolTip
-                      text={t('Scroll to Top', { ns: 'common' })}
-                      className="animate-in fade-in fade-out duration-300"
-                      isCompact
-                      delayDuration={2000}
-                      side="bottom"
-                      asChild
-                      sideOffset={10}
-                    >
-                      <ButtonGhost
-                        className="pointer-events-auto rounded-full bg-slate-300 dark:bg-slate-600 hover:bg-slate-200 hover:dark:bg-slate-700"
-                        onClick={() => {
-                          scrollToTopHistoryList(true)
-                        }}
-                      >
-                        <Text className="text-mute text-xs text-center px-3">
-                          {currentTopItemTimeAgo}
-                        </Text>
-                      </ButtonGhost>
-                    </ToolTip>
-                  </Box>
-                )}
-
-                <InfiniteLoader
-                  isItemLoaded={index =>
-                    index < clipboardHistory.length && !!clipboardHistory[index]
-                  }
-                  threshold={10}
-                  itemCount={clipboardHistory.length + 1}
-                  loadMoreItems={loadMoreClipBoardHistory}
-                >
-                  {({ onItemsRendered, ref }) => {
-                    return (
-                      <VariableSizeList
-                        overscanCount={10}
-                        style={{ overflowX: 'hidden' }}
-                        height={
-                          historyPanelHeight
-                            ? historyPanelHeight -
-                              (isShowSearch.value
-                                ? 40
-                                : pinnedClipboardHistory.length === 0
-                                  ? 0
-                                  : pinnedPanelHeight
-                                    ? pinnedPanelHeight
-                                    : 0)
-                            : 400
-                        }
-                        itemCount={clipboardHistory.length}
-                        width="100%"
-                        itemSize={getRowHeight}
-                        itemKey={index =>
-                          clipboardHistory[index].historyId ?? 'id-${index}'
-                        }
-                        onItemsRendered={e => {
-                          if (e.visibleStartIndex > 20) {
-                            const currentTopItem = clipboardHistory[e.visibleStartIndex]
-                            if (currentTopItem?.timeAgo) {
-                              if (currentTopItemTimeAgo !== currentTopItem.timeAgo) {
-                                setCurrentTopItemTimeAgo(currentTopItem.timeAgo)
-                              }
-                            } else {
-                              setCurrentTopItemTimeAgo('')
-                            }
-                          } else if (currentTopItemTimeAgo) {
-                            setCurrentTopItemTimeAgo('')
-                          }
-                          !debouncedSearchTerm && onItemsRendered(e)
-                        }}
-                        outerRef={historyListSimpleBarRef}
-                        ref={mergeRefs(listRef, ref)}
-                      >
-                        {({ index, style }) => {
-                          const clipboard = clipboardHistory[index]
-                          const { historyId, showTimeAgo, timeAgo } = clipboard
-
-                          return (
-                            <ClipboardHistoryQuickPasteRow
-                              hasClipboardHistoryURLErrors={clipboardHistoryIdsURLErrors.includes(
-                                historyId
-                              )}
-                              addToGenerateLinkMetaDataInProgress={
-                                addToGenerateLinkMetaDataInProgress
-                              }
-                              isLinkCardPreviewEnabled={isAutoPreviewLinkCardsEnabled}
-                              isAutoGenerateLinkCardsEnabled={
-                                isAutoGenerateLinkCardsEnabled
-                              }
-                              isScrolling={isScrolling}
-                              removeToGenerateLinkMetaDataInProgress={
-                                removeToGenerateLinkMetaDataInProgress
-                              }
-                              addToClipboardHistoryIdsURLErrors={
-                                addToClipboardHistoryIdsURLErrors
-                              }
-                              hasGenerateLinkMetaDataInProgress={clipboardHistoryGenerateLinkMetaDataInProgress.includes(
-                                historyId
-                              )}
-                              isWindows={isWindows}
-                              setHistoryFilters={setHistoryFilters}
-                              setAppFilters={setAppFilters}
-                              setSelectHistoryItem={() => {}}
-                              onCopy={onCopyHistoryItem}
-                              onCopyPaste={onCopyPasteHistoryItem}
-                              isKeyboardSelected={keyboardSelectedItemId === historyId}
-                              setKeyboardSelected={id => {
-                                const index = clipboardHistory.findIndex(
-                                  item => item.historyId === id
-                                )
-                                if (index > -1) {
-                                  keyboardIndexSelectedItem.value = index
-                                  keyboardIndexSelectedPinnedItem.value = -1
-                                }
-                              }}
-                              setSavingItem={setSavingItem}
-                              key={historyId}
-                              isDeleting={false}
-                              isSelected={false}
-                              setBrokenImageItem={setBrokenImageItem}
-                              isBrokenImage={brokenImageItems.includes(historyId)}
-                              showTimeAgo={showTimeAgo}
-                              timeAgo={timeAgo}
-                              isExpanded={expandedItems.includes(historyId)}
-                              isWrapText={wrappedTextItems.includes(historyId)}
-                              searchTerm={hasSearchOrFilter ? debouncedSearchTerm : ''}
-                              showSelectHistoryItems={false}
-                              invalidateClipboardHistoryQuery={() => {
-                                invalidateClipboardHistoryQuery()
-                                doRefetchFindClipboardHistory()
-                              }}
-                              setExpanded={setExpanded}
-                              setWrapText={setWrapText}
-                              isDark={isDark}
-                              setRowHeight={setRowHeight}
-                              clipboard={clipboard}
-                              removeLinkMetaData={removeLinkMetaData}
-                              generateLinkMetaData={generateLinkMetaData}
-                              isSingleClickToCopyPaste={
-                                isSingleClickToCopyPaste ||
-                                isSingleClickToCopyPasteQuickWindow
-                              }
-                              isSingleClickKeyboardFocus={isSingleClickKeyboardFocus}
-                              historyPreviewLineLimit={historyPreviewLineLimit}
-                              index={index}
-                              style={style}
-                            />
-                          )
-                        }}
-                      </VariableSizeList>
-                    )
-                  }}
-                </InfiniteLoader>
+                    }}
+                  />
+                ))}
               </div>
             ) : (
-              !isClipboardInfiniteHistoryLoading &&
-              infiniteClipboardHistory?.pages?.flat().length === 0 && (
-                <Flex className="flex items-center flex-col gap-3 justify-center">
-                  <Text className="animate-in fade-in duration-600 text-slate-300 text-xs bg-slate-100 rounded-full px-3 dark:text-slate-600 dark:bg-slate-900">
-                    {t('No Clipboard History', { ns: 'dashboard' })}
-                  </Text>
-                </Flex>
-              )
-            )}
-          </Box>
-        </Box>
+              <EmptyMessage
+                text={
+                  hasActiveSearch
+                    ? t('Nothing found', { ns: 'common' })
+                    : t('No pinned items', { ns: 'history' })
+                }
+              />
+            )
+          ) : clipboardHistory.length > 0 || hasHistorySearch ? (
+            <>
+              {currentTopItemTimeAgo && (
+                <Box className="top-1 absolute z-100 animate-in fade-in fade-out duration-300 flex justify-center w-full pointer-events-none">
+                  <ToolTip
+                    text={t('Scroll to Top', { ns: 'common' })}
+                    className="animate-in fade-in fade-out duration-300"
+                    isCompact
+                    delayDuration={2000}
+                    side="bottom"
+                    asChild
+                    sideOffset={10}
+                  >
+                    <ButtonGhost
+                      className="pointer-events-auto h-5 rounded-full bg-slate-300 dark:bg-slate-600 hover:bg-slate-200 hover:dark:bg-slate-700"
+                      onClick={() => {
+                        scrollToTopHistoryList(true)
+                      }}
+                    >
+                      <Text className="text-mute text-[10px] text-center px-2">
+                        {currentTopItemTimeAgo}
+                      </Text>
+                    </ButtonGhost>
+                  </ToolTip>
+                </Box>
+              )}
+
+              <InfiniteLoader
+                isItemLoaded={index =>
+                  index < clipboardHistory.length && !!clipboardHistory[index]
+                }
+                threshold={10}
+                itemCount={clipboardHistory.length + 1}
+                loadMoreItems={loadMoreClipBoardHistory}
+              >
+                {({ onItemsRendered, ref }) => {
+                  return (
+                    <VariableSizeList
+                      overscanCount={10}
+                      style={{ overflowX: 'hidden' }}
+                      height={listHeight ?? 300}
+                      itemCount={clipboardHistory.length}
+                      width="100%"
+                      itemSize={getRowHeight}
+                      itemKey={index =>
+                        clipboardHistory[index].historyId ?? `id-${index}`
+                      }
+                      onItemsRendered={e => {
+                        if (e.visibleStartIndex > 20) {
+                          const currentTopItem = clipboardHistory[e.visibleStartIndex]
+                          if (currentTopItem?.timeAgo) {
+                            if (currentTopItemTimeAgo !== currentTopItem.timeAgo) {
+                              setCurrentTopItemTimeAgo(currentTopItem.timeAgo)
+                            }
+                          } else {
+                            setCurrentTopItemTimeAgo('')
+                          }
+                        } else if (currentTopItemTimeAgo) {
+                          setCurrentTopItemTimeAgo('')
+                        }
+                        !debouncedSearchTerm && onItemsRendered(e)
+                      }}
+                      outerRef={historyListSimpleBarRef}
+                      ref={mergeRefs(listRef, ref)}
+                    >
+                      {({ index, style }) => {
+                        const clipboard = clipboardHistory[index]
+
+                        return (
+                          <ClipboardHistoryQuickPasteRow
+                            key={clipboard.historyId}
+                            {...getSharedRowProps(clipboard)}
+                            setKeyboardSelected={id => {
+                              const index = clipboardHistory.findIndex(
+                                item => item.historyId === id
+                              )
+                              if (index > -1) {
+                                setSelectedHistoryIndex(index)
+                              }
+                            }}
+                            setRowHeight={setRowHeight}
+                            timeAgo={clipboard.timeAgo}
+                            index={index}
+                            style={style}
+                          />
+                        )
+                      }}
+                    </VariableSizeList>
+                  )
+                }}
+              </InfiniteLoader>
+            </>
+          ) : (
+            isHistoryEmpty && (
+              <EmptyMessage text={t('No Clipboard History', { ns: 'dashboard' })} />
+            )
+          )}
+        </div>
       </Box>
     )
+  )
+}
+
+function QuickPasteTabButton({
+  isActive,
+  onClick,
+  icon,
+  label,
+  count,
+}: {
+  isActive: boolean
+  onClick: () => void
+  icon: React.ReactNode
+  label: string
+  count?: number
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={isActive}
+      tabIndex={-1}
+      onClick={onClick}
+      className={`flex-1 flex items-center justify-center gap-1 h-6 px-2 rounded text-xs font-medium transition-colors focus:outline-none ${
+        isActive
+          ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-slate-100'
+          : 'text-slate-500 hover:bg-white/60 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'
+      }`}
+    >
+      {icon}
+      <span className="truncate">{label}</span>
+      {typeof count === 'number' && count > 0 && (
+        <span
+          className={`text-[10px] leading-4 px-1 rounded-full ${
+            isActive
+              ? 'bg-orange-200/80 text-orange-800 dark:bg-orange-900/70 dark:text-orange-200'
+              : 'bg-slate-300/70 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
+          }`}
+        >
+          {count}
+        </span>
+      )}
+    </button>
+  )
+}
+
+function EmptyMessage({ text }: { text: string }) {
+  return (
+    <Flex className="items-center justify-center pt-6">
+      <Text className="animate-in fade-in duration-600 text-slate-400 text-xs bg-slate-100 rounded-full px-3 dark:text-slate-500 dark:bg-slate-900">
+        {text}
+      </Text>
+    </Flex>
   )
 }
 
@@ -1089,19 +943,23 @@ const SearchInput = React.memo(
     searchTerm,
     setSearchTerm,
     searchHistoryInputRef,
-    t,
+    onClear,
+    resultText,
+    placeholder,
   }: {
     searchTerm: string
     setSearchTerm: (value: string) => void
     searchHistoryInputRef: React.RefObject<HTMLInputElement>
-    t: (key: string, options?: Record<string, unknown>) => string
+    onClear: () => void
+    resultText: string
+    placeholder: string
   }) => (
-    <Box className="flex flex-row bg-slate-100 dark:bg-slate-700 rounded-md p-0 items-center h-[40px] mb-3">
+    <Box className="shrink-0 flex flex-row bg-slate-100 dark:bg-slate-700 rounded-md p-0 items-center h-7 mb-1">
       <Input
-        placeholder={`${t('Find in history', { ns: 'dashboard' })}...`}
+        placeholder={placeholder}
         autoFocus
         key="search-history"
-        type="search"
+        type="text"
         onChange={e => {
           const newValue = e.target.value
           if (newValue !== searchTerm) {
@@ -1110,24 +968,39 @@ const SearchInput = React.memo(
         }}
         value={searchTerm}
         ref={searchHistoryInputRef}
-        iconLeft={<Search className="h-4 w-4" />}
-        classNameInput="w-full pr-0"
-        className="text-md ring-offset-0 bg-slate-100 dark:bg-slate-700 border-r-0 border-t-0 border-b-0"
+        iconLeft={<Search className="h-3.5 w-3.5" />}
+        classNameInput="w-full pr-0 h-7 text-xs"
+        className="h-7 text-xs ring-offset-0 bg-slate-100 dark:bg-slate-700 border-r-0 border-t-0 border-b-0"
         onKeyDown={e => {
-          // Allow navigation keys and Escape to bubble up
+          // Allow navigation keys, Tab and Escape to bubble up
           if (
             !keyEscape.includes(e.key) &&
             !keyUp.includes(e.key) &&
             !keyDown.includes(e.key) &&
             !keyPageUp.includes(e.key) &&
             !keyPageDown.includes(e.key) &&
-            !keyHome.includes(e.key) &&
-            !keyEnter.includes(e.key)
+            !keyEnter.includes(e.key) &&
+            !keyTab.includes(e.key)
           ) {
             e.stopPropagation()
           }
         }}
       />
+      {resultText && (
+        <Text className="shrink-0 text-[10px] text-slate-500 dark:text-slate-400 px-1 whitespace-nowrap">
+          {resultText}
+        </Text>
+      )}
+      {searchTerm.length > 0 && (
+        <button
+          type="button"
+          tabIndex={-1}
+          className="shrink-0 h-7 w-6 flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+          onClick={onClear}
+        >
+          <X size={13} />
+        </button>
+      )}
     </Box>
   )
 )
