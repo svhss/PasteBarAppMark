@@ -66,6 +66,7 @@ Show collections menu on the navbar: Show collections menu on the navbar
 Show navbar elements on hover only: Show navbar elements on hover only
 Show/Hide Main App Window: Show/Hide Main App Window
 Show/Hide Quick Paste Window: Show/Hide Quick Paste Window
+This key cannot be used in a hotkey: This key cannot be used in a hotkey
 Win+V always opens the Quick Paste window. You do not need to set it here.: Win+V always opens the Quick Paste window. You do not need to set it here.
 Simplified Panel Layout: Simplified Panel Layout
 Single Click Copy/Paste: Single Click Copy/Paste

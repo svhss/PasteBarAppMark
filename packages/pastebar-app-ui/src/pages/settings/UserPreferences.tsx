@@ -55,6 +55,22 @@ import { NoteIconType } from '../components/Dashboard/components/utils'
 import CustomDatabaseLocationSettings from './CustomDatabaseLocationSettings'
 import GlobalTemplatesSettings from './GlobalTemplatesSettings'
 
+// Windows: KeyboardEvent.code -> key name for the hotkey system (physical key position)
+const WINDOWS_PHYSICAL_KEY_NAMES: Record<string, string> = {
+  Backquote: 'Backquote',
+  Minus: 'Minus',
+  Equal: 'Equal',
+  BracketLeft: 'BracketLeft',
+  BracketRight: 'BracketRight',
+  Backslash: 'Backslash',
+  Semicolon: 'Semicolon',
+  Quote: 'Quote',
+  Comma: 'Comma',
+  Period: 'Period',
+  Slash: 'Slash',
+  IntlBackslash: 'IntlBackslash',
+}
+
 export default function UserPreferences() {
   const { t } = useTranslation()
 
@@ -216,9 +232,20 @@ export default function UserPreferences() {
     // Add non-modifier key
     if (!['Control', 'Shift', 'Alt', 'Meta'].includes(key)) {
       let keyName = key
+      const physicalKeyName = WINDOWS_PHYSICAL_KEY_NAMES[event.code]
       // Handle special keys
       if (key === ' ') {
         keyName = 'Space'
+      } else if (isWindows && physicalKeyName && !/^[a-z0-9]$/i.test(key)) {
+        // Windows: punctuation and national keys (for example the Hungarian í, é, á)
+        // are saved by their physical key position, which the hotkey system understands
+        keyName = physicalKeyName
+      } else if (isWindows && key.length === 1 && !/^[\x20-\x7e]$/.test(key)) {
+        // A national letter on a key that the hotkey system cannot use
+        setCurrentKeyPreview(
+          t('This key cannot be used in a hotkey', { ns: 'settings2' })
+        )
+        return
       } else if (key.length === 1) {
         keyName = key.toUpperCase()
       } else {

@@ -844,18 +844,12 @@ pub(crate) fn key_to_vk(key: &KeyCode) -> Option<VIRTUAL_KEY> {
     KeyCode::Digit7 => unsafe { VIRTUAL_KEY(VkKeyScanW('7' as u16) as u16) },
     KeyCode::Digit8 => unsafe { VIRTUAL_KEY(VkKeyScanW('8' as u16) as u16) },
     KeyCode::Digit9 => unsafe { VIRTUAL_KEY(VkKeyScanW('9' as u16) as u16) },
-    KeyCode::Comma => VK_OEM_COMMA,
-    KeyCode::Minus => VK_OEM_MINUS,
+    // PasteBar change: punctuation keys (Comma, Minus, Period, Equal, Semicolon,
+    // Slash, Backslash, Quote, Backquote, BracketLeft, BracketRight, IntlBackslash)
+    // use the physical key position (see the fallback below). The old code looked
+    // up the US character, which gives the wrong key (or no key) on other layouts,
+    // for example the Hungarian keys ü, ó, ő, ú, é, á, ű and í.
     KeyCode::Plus => VK_OEM_PLUS,
-    KeyCode::Period => VK_OEM_PERIOD,
-    KeyCode::Equal => unsafe { VIRTUAL_KEY(VkKeyScanW('=' as u16) as u16) },
-    KeyCode::Semicolon => unsafe { VIRTUAL_KEY(VkKeyScanW(';' as u16) as u16) },
-    KeyCode::Slash => unsafe { VIRTUAL_KEY(VkKeyScanW('/' as u16) as u16) },
-    KeyCode::Backslash => unsafe { VIRTUAL_KEY(VkKeyScanW('\\' as u16) as u16) },
-    KeyCode::Quote => unsafe { VIRTUAL_KEY(VkKeyScanW('\'' as u16) as u16) },
-    KeyCode::Backquote => unsafe { VIRTUAL_KEY(VkKeyScanW('`' as u16) as u16) },
-    KeyCode::BracketLeft => unsafe { VIRTUAL_KEY(VkKeyScanW('[' as u16) as u16) },
-    KeyCode::BracketRight => unsafe { VIRTUAL_KEY(VkKeyScanW(']' as u16) as u16) },
     KeyCode::Backspace => VK_BACK,
     KeyCode::Tab => VK_TAB,
     KeyCode::Space => VK_SPACE,
@@ -920,6 +914,15 @@ pub(crate) fn key_to_vk(key: &KeyCode) -> Option<VIRTUAL_KEY> {
     KeyCode::MediaPlayPause => VK_MEDIA_PLAY_PAUSE,
     KeyCode::LaunchMail => VK_LAUNCH_MAIL,
     KeyCode::Convert => VK_CONVERT,
-    _ => return None,
+    // PasteBar change: for other keys, get the virtual key of the physical key
+    // position (scan code) in the current keyboard layout.
+    other => {
+      let scancode = super::keycode::keycode_to_scancode(*other)?;
+      let vk = unsafe { MapVirtualKeyW(scancode, MAPVK_VSC_TO_VK_EX) };
+      if vk == 0 {
+        return None;
+      }
+      VIRTUAL_KEY(vk as u16)
+    }
   })
 }
